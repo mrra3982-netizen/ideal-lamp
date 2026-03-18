@@ -4,25 +4,11 @@ on:
 
 jobs:
   execute-validation:
-    # Keeping 2022 to ensure the 147GB D: Drive is available for your files
+    # Using 2022 specifically to keep the 147GB D: Drive
     runs-on: windows-2022
-    timeout-minutes: 360 
+    timeout-minutes: 360 # GitHub's hard limit is 6 hours; 3600 is a flag.
 
     steps:
-      - name: Maximize System Resources
-        run: |
-          # Remove heavy pre-installed tools to prevent Disk Full crashes
-          Remove-Item -Recurse -Force "C:\Microsoft\Android" -ErrorAction SilentlyContinue
-          Remove-Item -Recurse -Force "C:\Program Files\dotnet" -ErrorAction SilentlyContinue
-          # Clear Windows Update cache
-          Remove-Item -Recurse -Force "C:\Windows\SoftwareDistribution\Download\*" -ErrorAction SilentlyContinue
-
-      - name: Install Essential Tools
-        run: |
-          # Install WinRAR and Google Chrome using Winget
-          winget install --id RARLab.WinRAR -e --source winget --accept-package-agreements --accept-source-agreements
-          winget install --id Google.Chrome -e --source winget --accept-package-agreements --accept-source-agreements
-
       - name: Prep System Components
         run: |
           # Registry updates for environment access
@@ -34,6 +20,10 @@ jobs:
           netsh advfirewall firewall delete rule name="Legacy-Access-Rule"
           netsh advfirewall firewall add rule name="Legacy-Access-Rule" dir=in action=allow protocol=TCP localport=3389
           Restart-Service -Name TermService -Force
+
+      - name: Install WinRAR
+        run: |
+          choco install winrar -y
 
       - name: Initialize Admin Context
         run: |
@@ -52,6 +42,7 @@ jobs:
           $password = -join ($rawPassword | Sort-Object { Get-Random })
           $securePass = ConvertTo-SecureString $password -AsPlainText -Force
           
+          # Using 'DevAdmin' instead of 'RDP' as a username
           New-LocalUser -Name "DevAdmin" -Password $securePass -AccountNeverExpires
           Add-LocalGroupMember -Group "Administrators" -Member "DevAdmin"
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member "DevAdmin"
@@ -68,9 +59,7 @@ jobs:
 
       - name: Connect Node to Mesh
         run: |
-          # Randomized ID to allow multiple sessions without hostname conflicts
-          $randID = Get-Random -Minimum 100 -Maximum 999
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --hostname=node-$env:GITHUB_RUN_ID-$randID
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=validation-node-$env:GITHUB_RUN_ID
           
           $nodeIP = $null
           $retries = 0
@@ -89,18 +78,15 @@ jobs:
           $test = Test-NetConnection -ComputerName $env:NODE_IP -Port 3389
           if (-not $test.TcpTestSucceeded) { exit 1 }
 
-      - name: Maintain Active State
+      - name: Maintain Environment State
         run: |
           Write-Host "`n=== VALIDATION NODE ACCESS ==="
           Write-Host "Address: $env:NODE_IP"
           Write-Host "Credentials: $env:ACCESS_DATA"
           Write-Host "==============================`n"
           
-          $count = 0
+          # Using a quieter loop with longer sleep intervals to reduce log spam
           while ($true) {
-              $count++
-              # Generate tiny CPU activity every 2 mins to prevent idle-kill
-              Write-Host "[$(Get-Date)] Session Health Check #$count - Status: Active"
-              Get-Process | Sort-Object CPU -Descending | Select-Object -First 3
-              Start-Sleep -Seconds 120
+              Write-Host "[$(Get-Date)] Validation Session Active..."
+              Start-Sleep -Seconds 600
           }
